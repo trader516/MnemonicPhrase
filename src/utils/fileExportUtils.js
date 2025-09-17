@@ -202,8 +202,8 @@ export class FileExportUtils {
         }, null, 2);
 
       case 'csv':
-        return `ID,加密数据,创建时间,词数,算法,备注\n` +
-               `${result.id || 1},"${result.encryptedData}","${new Date(result.createdAt).toLocaleString()}",${result.wordCount},"${result.algorithm || 'AES-256-CTR'}","单个导出"`;
+        return `ID,加密数据,EVM地址,创建时间,词数,算法,备注\n` +
+               `${result.id || 1},"${result.encryptedData}","${result.address || ''}","${new Date(result.createdAt).toLocaleString()}",${result.wordCount},"${result.algorithm || 'AES-256-CTR'}","单个导出"`;
 
       case 'txt':
         return `=== 助记词加密数据 ===\n` +
@@ -251,9 +251,9 @@ export class FileExportUtils {
         }, null, 2);
 
       case 'csv':
-        const header = 'ID,加密数据,创建时间,词数,算法,备注\n';
-        const rows = results.map((r, index) => 
-          `${index + 1},"${r.encryptedData}","${new Date(r.createdAt).toLocaleString()}",${r.wordCount},"${r.algorithm || 'AES-256-CTR'}","批量生成"`
+        const header = 'ID,加密数据,EVM地址,创建时间,词数,算法,备注\n';
+        const rows = results.map((r, index) =>
+          `${index + 1},"${r.encryptedData}","${r.address || ''}","${new Date(r.createdAt).toLocaleString()}",${r.wordCount},"${r.algorithm || 'AES-256-CTR'}","批量生成"`
         ).join('\n');
         return header + rows;
 

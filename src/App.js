@@ -4,6 +4,7 @@ import { CssBaseline, Container, Paper, Typography, Box } from '@mui/material';
 import MnemonicGenerator from './components/MnemonicGenerator';
 import EncryptionPanel from './components/EncryptionPanel';
 import BatchProcessor from './components/BatchProcessor';
+import AddressValidator from './components/AddressValidator';
 import './App.css';
 
 const theme = createTheme({
@@ -121,11 +122,17 @@ function App() {
               >
                 🔓 解密助记词
               </button>
-              <button 
+              <button
                 className={`tab-button ${currentTab === 3 ? 'active' : ''}`}
                 onClick={() => setCurrentTab(3)}
               >
-                ⚡ 批量处理
+                ⚡ 批量生成
+              </button>
+              <button
+                className={`tab-button ${currentTab === 4 ? 'active' : ''}`}
+                onClick={() => setCurrentTab(4)}
+              >
+                🔍 地址验证
               </button>
             </div>
           </Box>
@@ -156,9 +163,13 @@ function App() {
           )}
 
           {currentTab === 3 && (
-            <BatchProcessor 
+            <BatchProcessor
               onBatchComplete={(results) => setEncryptedResults(results)}
             />
+          )}
+
+          {currentTab === 4 && (
+            <AddressValidator />
           )}
         </Paper>
 

@@ -101,22 +101,23 @@ const OfflineQRGenerator = ({ open, onClose, data, title = '助记词二维码' 
     }
   };
 
-  const handleCopyImage = async () => {
-    if (!qrDataUrl) return;
+
+  const handleCopyText = async () => {
+    if (!data) return;
 
     try {
-      // 将DataURL转换为Blob
-      const response = await fetch(qrDataUrl);
-      const blob = await response.blob();
-      
-      await navigator.clipboard.write([
-        new ClipboardItem({ 'image/png': blob })
-      ]);
-      
-      console.log('📋 二维码已复制到剪贴板');
-      alert('二维码图片已复制到剪贴板！');
+      let textToCopy = data;
+      if (typeof data === 'object') {
+        // 如果是对象，尝试提取助记词或地址
+        textToCopy = data.mnemonic || data.address || data.encryptedData || JSON.stringify(data);
+      }
+
+      await navigator.clipboard.writeText(textToCopy);
+
+      console.log('📋 助记词已复制到剪贴板:', textToCopy.substring(0, 20) + '...');
+      alert('助记词已复制到剪贴板！');
     } catch (error) {
-      console.error('❌ 图片复制失败:', error);
+      console.error('❌ 助记词复制失败:', error);
       alert('复制失败：' + error.message);
     }
   };
@@ -208,13 +209,15 @@ const OfflineQRGenerator = ({ open, onClose, data, title = '助记词二维码' 
         <Alert severity="info">
           <Typography variant="subtitle2">使用说明</Typography>
           <Typography variant="body2">
-            • 此二维码包含您的助记词文本，可直接被钱包应用识别
+            • 点击“复制助记词”按钮可直接复制文本内容到剪贴板
             <br />
-            • 可使用任何二维码扫描器读取
+            • 二维码包含完整的助记词或地址，可被钱包应用识别
             <br />
-            • 建议在安全环境中展示此二维码
+            • 可使用任何二维码扫描器读取，或下载二维码图片
             <br />
-            • 支持导入到支持BIP39助记词的钱包中
+            • 建议在安全环境中使用，避免在公共场所展示
+            <br />
+            • 支持导入到支持BIP39标准的钱包中
           </Typography>
         </Alert>
       </DialogContent>
@@ -227,23 +230,24 @@ const OfflineQRGenerator = ({ open, onClose, data, title = '助记词二维码' 
             onClick={handleDownload}
             disabled={!qrDataUrl}
           >
-            下载
+            下载二维码
           </Button>
 
           <Button
-            variant="outlined"
+            variant="contained"
             startIcon={<ContentCopy />}
-            onClick={handleCopyImage}
-            disabled={!qrDataUrl}
+            onClick={handleCopyText}
+            disabled={!data}
+            color="primary"
           >
-            复制
+            复制助记词
           </Button>
 
           <Box sx={{ flex: 1 }} />
 
           <Button
             onClick={onClose}
-            variant="contained"
+            variant="outlined"
           >
             关闭
           </Button>

@@ -36,6 +36,7 @@ import {
   QrCode
 } from '@mui/icons-material';
 import { generateMnemonic, encryptMnemonic } from '../utils/cryptoUtilsGUI';
+import { generateEthereumAddress, formatAddress } from '../utils/evmUtils';
 import { fileExporter } from '../utils/fileExportUtils';
 import OfflineQRGenerator from './OfflineQRGenerator';
 
@@ -59,6 +60,8 @@ const BatchProcessor = ({ onBatchComplete }) => {
   const [startTime, setStartTime] = useState(null);
   const [qrOpen, setQrOpen] = useState(false);
   const [qrData, setQrData] = useState('');
+  const [addressQrOpen, setAddressQrOpen] = useState(false);
+  const [addressQrData, setAddressQrData] = useState('');
   
   const workerRef = useRef(null);
   const pausedRef = useRef(false);
@@ -67,6 +70,12 @@ const BatchProcessor = ({ onBatchComplete }) => {
     if (!mnemonicText) return;
     setQrData(typeof mnemonicText === 'string' ? mnemonicText : String(mnemonicText));
     setQrOpen(true);
+  };
+
+  const handleShowAddressQR = (address) => {
+    if (!address) return;
+    setAddressQrData(address);
+    setAddressQrOpen(true);
   };
 
   const handleStart = async () => {
@@ -156,7 +165,17 @@ const BatchProcessor = ({ onBatchComplete }) => {
         const encrypted = await encryptMnemonic(mnemonic, currentPassword);
         console.log(`✅ 第 ${i + 1} 个助记词加密成功:`, encrypted.substring(0, 20) + '...');
         completedSteps++;
-        
+
+        // 生成EVM地址
+        let addressInfo = null;
+        try {
+          setCurrentStep(`正在生成第 ${i + 1} 个地址...`);
+          addressInfo = generateEthereumAddress(mnemonic);
+          console.log(`✅ 第 ${i + 1} 个地址生成成功:`, addressInfo.address);
+        } catch (addressError) {
+          console.warn(`第 ${i + 1} 个地址生成失败:`, addressError);
+        }
+
         const result = {
           id: i + 1,
           mnemonic: mnemonic,
@@ -166,7 +185,9 @@ const BatchProcessor = ({ onBatchComplete }) => {
           createdAt: new Date().toISOString(),
           algorithm: 'AES-256-CTR',
           keyDerivation: 'PBKDF2-SHA256',
-          iterations: 10000
+          iterations: 10000,
+          address: addressInfo?.address,
+          privateKey: addressInfo?.privateKey
         };
         
         batchResults.push(result);
@@ -515,12 +536,26 @@ const BatchProcessor = ({ onBatchComplete }) => {
                         <Box>
                           <Typography variant="body2" sx={{ fontWeight: 600 }}>账号 {acc.id}</Typography>
                           <Typography variant="caption" color="textSecondary">{acc.wordCount} 词</Typography>
+                          {acc.address && (
+                            <Typography variant="caption" color="primary" display="block" sx={{ fontFamily: 'monospace' }}>
+                              {formatAddress(acc.address, 6, 4)}
+                            </Typography>
+                          )}
                         </Box>
-                        <Tooltip title="导出助记词二维码">
-                          <IconButton size="small" color="primary" onClick={() => handleShowQR(acc.mnemonic)}>
-                            <QrCode fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
+                        <Box>
+                          <Tooltip title="导出助记词二维码">
+                            <IconButton size="small" color="primary" onClick={() => handleShowQR(acc.mnemonic)}>
+                              <QrCode fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          {acc.address && (
+                            <Tooltip title="导出地址二维码">
+                              <IconButton size="small" color="secondary" onClick={() => handleShowAddressQR(acc.address)}>
+                                <QrCode fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </Box>
                       </Box>
                       <Typography variant="caption" sx={{ mt: 1, display: 'block', fontFamily: 'monospace' }}>
                         {typeof acc.mnemonic === 'string' ? acc.mnemonic.split(' ').slice(0, 4).join(' ') : ''} ...
@@ -565,6 +600,7 @@ const BatchProcessor = ({ onBatchComplete }) => {
                 <TableRow>
                   <TableCell>序号</TableCell>
                   <TableCell>词数</TableCell>
+                  <TableCell>EVM地址</TableCell>
                   <TableCell>加密数据</TableCell>
                   <TableCell>创建时间</TableCell>
                   <TableCell>状态</TableCell>
@@ -577,8 +613,11 @@ const BatchProcessor = ({ onBatchComplete }) => {
                     <TableCell>
                       <Chip label={`${result.wordCount} 词`} size="small" />
                     </TableCell>
-                    <TableCell sx={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'monospace', fontSize: '12px' }}>
-                      {result.encryptedData.substring(0, 50)}...
+                    <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'monospace', fontSize: '12px' }}>
+                      {result.address ? formatAddress(result.address, 6, 4) : '未生成'}
+                    </TableCell>
+                    <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'monospace', fontSize: '12px' }}>
+                      {result.encryptedData.substring(0, 30)}...
                     </TableCell>
                     <TableCell sx={{ fontSize: '12px' }}>
                       {new Date(result.createdAt).toLocaleString('zh-CN')}
@@ -595,11 +634,12 @@ const BatchProcessor = ({ onBatchComplete }) => {
       )}
 
       <Alert severity="info" sx={{ mt: 3 }}>
-        <Typography variant="subtitle2">批量处理说明:</Typography>
+        <Typography variant="subtitle2">批量生成说明:</Typography>
         <Typography variant="body2">
           • 统一密码: 所有助记词使用相同密码加密，便于管理<br/>
           • 独立密码: 每个助记词使用不同密码，安全性更高<br/>
-          • 处理过程中可以暂停和恢复，确保数据不丢失<br/>
+          • 生成过程中可以暂停和恢复，确保数据不丢失<br/>
+          • 自动生成EVM地址，支持二维码导出<br/>
           • 建议单次处理不超过100个助记词以保证稳定性
         </Typography>
       </Alert>
@@ -610,6 +650,14 @@ const BatchProcessor = ({ onBatchComplete }) => {
         onClose={() => setQrOpen(false)}
         data={qrData}
         title="助记词二维码"
+      />
+
+      {/* 地址二维码生成器 */}
+      <OfflineQRGenerator
+        open={addressQrOpen}
+        onClose={() => setAddressQrOpen(false)}
+        data={addressQrData}
+        title="EVM地址二维码"
       />
     </Paper>
   );

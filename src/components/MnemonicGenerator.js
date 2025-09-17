@@ -22,6 +22,7 @@ import {
   CheckCircle
 } from '@mui/icons-material';
 import { generateMnemonic, validateMnemonic } from '../utils/cryptoUtilsGUI';
+import { generateEthereumAddress, formatAddress } from '../utils/evmUtils';
 import OfflineQRGenerator from './OfflineQRGenerator';
 
 const MnemonicGenerator = ({ mnemonics, setMnemonics }) => {
@@ -30,6 +31,8 @@ const MnemonicGenerator = ({ mnemonics, setMnemonics }) => {
   const [copySuccess, setCopySuccess] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [qrData, setQrData] = useState('');
+  const [addressQrOpen, setAddressQrOpen] = useState(false);
+  const [addressQrData, setAddressQrData] = useState('');
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -43,12 +46,22 @@ const MnemonicGenerator = ({ mnemonics, setMnemonics }) => {
         throw new Error('生成的助记词验证失败');
       }
       
+      // 生成对应的EVM地址
+      let addressInfo = null;
+      try {
+        addressInfo = generateEthereumAddress(mnemonic);
+      } catch (addressError) {
+        console.warn('生成EVM地址失败:', addressError);
+      }
+
       const newMnemonic = {
         id: Date.now(),
         words: mnemonic.split(' '),
         wordCount: count,
         createdAt: new Date().toISOString(),
-        isValid: true
+        isValid: true,
+        address: addressInfo?.address,
+        privateKey: addressInfo?.privateKey
       };
       
       setMnemonics([newMnemonic]);
@@ -80,9 +93,27 @@ const MnemonicGenerator = ({ mnemonics, setMnemonics }) => {
 
   const handleGenerateQR = (mnemonic) => {
     const text = mnemonic.words.join(' ');
-    console.log('🔍 生成二维码:', text);
+    console.log('🔍 生成助记词二维码:', text);
     setQrData(text);
     setQrOpen(true);
+  };
+
+  const handleGenerateAddressQR = (mnemonic) => {
+    if (mnemonic.address) {
+      console.log('🔍 生成地址二维码:', mnemonic.address);
+      setAddressQrData(mnemonic.address);
+      setAddressQrOpen(true);
+    }
+  };
+
+  const handleCopyAddress = async (address) => {
+    try {
+      await navigator.clipboard.writeText(address);
+      console.log('📋 地址已复制到剪贴板:', address);
+      alert('地址已复制到剪贴板');
+    } catch (error) {
+      console.error('复制地址失败:', error);
+    }
   };
 
   return (
@@ -151,7 +182,7 @@ const MnemonicGenerator = ({ mnemonics, setMnemonics }) => {
                       <ContentCopy />
                     </IconButton>
                   </Tooltip>
-                  <Tooltip title="生成二维码">
+                  <Tooltip title="生成助记词二维码">
                     <IconButton
                       color="primary"
                       onClick={() => handleGenerateQR(mnemonic)}
@@ -173,7 +204,51 @@ const MnemonicGenerator = ({ mnemonics, setMnemonics }) => {
                   ))}
                 </div>
                 
-                <Typography variant="caption" color="textSecondary">
+                {/* EVM地址显示 */}
+                {mnemonic.address && (
+                  <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      📍 对应的EVM地址
+                    </Typography>
+                    <Box display="flex" alignItems="center" justifyContent="space-between">
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontFamily: 'monospace',
+                          wordBreak: 'break-all',
+                          flex: 1,
+                          mr: 1
+                        }}
+                      >
+                        {mnemonic.address}
+                      </Typography>
+                      <Box>
+                        <Tooltip title="复制地址">
+                          <IconButton
+                            size="small"
+                            onClick={() => handleCopyAddress(mnemonic.address)}
+                          >
+                            <ContentCopy fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="生成地址二维码">
+                          <IconButton
+                            size="small"
+                            color="secondary"
+                            onClick={() => handleGenerateAddressQR(mnemonic)}
+                          >
+                            <QrCode fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    </Box>
+                    <Typography variant="caption" color="textSecondary">
+                      路径: m/44'/60'/0'/0/0 (以太坊标准)
+                    </Typography>
+                  </Box>
+                )}
+
+                <Typography variant="caption" color="textSecondary" display="block" sx={{ mt: 1 }}>
                   生成时间: {new Date(mnemonic.createdAt).toLocaleString('zh-CN')}
                 </Typography>
               </div>
@@ -206,6 +281,14 @@ const MnemonicGenerator = ({ mnemonics, setMnemonics }) => {
         onClose={() => setQrOpen(false)}
         data={qrData}
         title="助记词二维码"
+      />
+
+      {/* 地址二维码生成器 */}
+      <OfflineQRGenerator
+        open={addressQrOpen}
+        onClose={() => setAddressQrOpen(false)}
+        data={addressQrData}
+        title="EVM地址二维码"
       />
     </Paper>
   );
