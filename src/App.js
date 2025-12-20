@@ -5,6 +5,7 @@ import MnemonicGenerator from './components/MnemonicGenerator';
 import EncryptionPanel from './components/EncryptionPanel';
 import BatchProcessor from './components/BatchProcessor';
 import AddressValidator from './components/AddressValidator';
+import GasBatchManager from './components/GasBatchManager';
 import './App.css';
 
 const theme = createTheme({
@@ -134,6 +135,12 @@ function App() {
               >
                 🔍 地址验证
               </button>
+              <button
+                className={`tab-button ${currentTab === 5 ? 'active' : ''}`}
+                onClick={() => setCurrentTab(5)}
+              >
+                ⛽ Gas 批量
+              </button>
             </div>
           </Box>
 
@@ -170,6 +177,10 @@ function App() {
 
           {currentTab === 4 && (
             <AddressValidator />
+          )}
+
+          {currentTab === 5 && (
+            <GasBatchManager />
           )}
         </Paper>
 

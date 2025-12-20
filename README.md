@@ -39,6 +39,26 @@ npx http-server build -p 5173 -c-1
 ```
 打开 `http://127.0.0.1:5173`。
 
+## Vercel 部署（推荐：前端 + 后端 API）
+为了避免浏览器 CORS 问题，建议使用 Vercel 的 Serverless Functions 处理批量发送/回收。
+
+### 1) Vercel 环境变量（可选）
+后端默认使用用户在页面输入的 RPC 地址与私钥，不需要在 Vercel 环境变量中配置 RPC。
+如需调整助记词派生路径默认值，可配置：
+- `TX_SERVER_MNEMONIC_PATH`
+
+### 2) 前端构建变量（推荐）
+- `REACT_APP_USE_BACKEND_SENDER=true`
+- `REACT_APP_BACKEND_URL` 可留空（默认使用同域 `/api`）
+- `REACT_APP_DEFAULT_RPC_URL`（可选，预填 RPC 输入框）
+
+### 3) 部署说明
+项目已包含 `vercel.json`，自动输出 `build/` 并部署 `/api/*`。
+
+### 安全提醒
+`/api/send-batch` 和 `/api/reclaim-batch` 会接收用户输入的私钥并进行签名。
+请确保部署为私有或开启访问保护（例如 Vercel Deployment Protection），避免被他人调用。
+
 ## 使用说明
 - 生成助记词：选择词数，点击生成，可直接复制或查看二维码。
 - 加密/解密：输入助记词与密码（或密文与密码），执行操作。

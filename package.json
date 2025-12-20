@@ -28,6 +28,8 @@
     "eject": "react-scripts eject",
     "electron": "electron .",
     "electron-dev": "ELECTRON_IS_DEV=true electron .",
+    "rpc-proxy": "node scripts/rpc-proxy.js",
+    "tx-server": "node scripts/tx-server.js",
     "electron-pack": "npm run build && electron-builder",
     "preelectron-pack": "npm run build"
   },
