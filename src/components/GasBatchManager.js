@@ -223,7 +223,7 @@ const GasBatchManager = () => {
   const defaultUseBackend =
     backendSenderEnv && backendSenderEnv.length > 0
       ? backendSenderEnv.toLowerCase() === 'true'
-      : process.env.NODE_ENV === 'production';
+      : false;
 
   const [selectedNetwork, setSelectedNetwork] = useState(networks[0]);
   const [rpcUrl, setRpcUrl] = useState(defaultRpcUrl);
