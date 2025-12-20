@@ -37,6 +37,7 @@ import {
 } from '../utils/evmUtils';
 
 const FALLBACK_PRIORITY_FEE_GWEI = '0.05';
+const GAS_LIMIT_FALLBACK = 60000n;
 
 const normalizeHeader = (value) => {
   if (!value) return '';
@@ -186,6 +187,20 @@ const guessSecretType = (value) => {
 };
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const addGasBuffer = (gasLimit) => {
+  if (gasLimit <= 0n) return gasLimit;
+  return gasLimit + gasLimit / 5n;
+};
+
+const estimateGasLimit = async (provider, tx, fallback = GAS_LIMIT_FALLBACK) => {
+  try {
+    const estimate = await provider.estimateGas(tx);
+    return addGasBuffer(estimate);
+  } catch (error) {
+    return fallback;
+  }
+};
 
 const GasBatchManager = () => {
   const networks = useMemo(
@@ -489,11 +504,16 @@ const GasBatchManager = () => {
         for (let i = 0; i < recipients.length; i += 1) {
           const to = recipients[i];
           const label = `${i + 1}/${recipients.length} ${formatAddress(to, 6, 4)}`;
+          const gasLimit = await estimateGasLimit(provider, {
+            to,
+            from: wallet.address,
+            value: amountWei
+          });
           try {
             const tx = await wallet.sendTransaction({
               to,
               value: amountWei,
-              gasLimit: 21000,
+              gasLimit,
               ...feeOptions,
               nonce: nextNonce
             });
@@ -511,7 +531,7 @@ const GasBatchManager = () => {
                 const retryTx = await wallet.sendTransaction({
                   to,
                   value: amountWei,
-                  gasLimit: 21000,
+                  gasLimit,
                   ...feeOptions,
                   nonce: nextNonce
                 });
@@ -543,7 +563,7 @@ const GasBatchManager = () => {
                 const retryTx = await wallet.sendTransaction({
                   to,
                   value: amountWei,
-                  gasLimit: 21000,
+                  gasLimit,
                   ...feeOptions,
                   nonce: nextNonce
                 });
@@ -621,7 +641,6 @@ const GasBatchManager = () => {
       } else {
         const provider = getProvider();
         const feeOptions = await getFeeOptions(provider);
-        const gasCost = feeOptions.maxFeePerGas * 21000n;
 
         for (let i = 0; i < selectedAccounts.length; i += 1) {
           const account = selectedAccounts[i];
@@ -636,6 +655,12 @@ const GasBatchManager = () => {
             const wallet = new ethers.Wallet(account.privateKey).connect(provider);
             const nonce = await provider.getTransactionCount(wallet.address, 'pending');
             const balance = await provider.getBalance(wallet.address);
+            const estimatedGasLimit = await estimateGasLimit(provider, {
+              to: reclaimAddress,
+              from: wallet.address,
+              value: 1n
+            });
+            const gasCost = estimatedGasLimit * feeOptions.maxFeePerGas;
             const sendable = balance - reserveWei - gasCost;
 
             if (sendable <= 0n) {
@@ -643,10 +668,27 @@ const GasBatchManager = () => {
               continue;
             }
 
+            const finalGasLimit = await estimateGasLimit(
+              provider,
+              {
+                to: reclaimAddress,
+                from: wallet.address,
+                value: sendable
+              },
+              estimatedGasLimit
+            );
+            const finalGasCost = finalGasLimit * feeOptions.maxFeePerGas;
+            const finalSendable = balance - reserveWei - finalGasCost;
+
+            if (finalSendable <= 0n) {
+              setReclaimLogs((prev) => [...prev, `⚠️ 余额不足，跳过 ${label}`]);
+              continue;
+            }
+
             const tx = await wallet.sendTransaction({
               to: reclaimAddress,
-              value: sendable,
-              gasLimit: 21000,
+              value: finalSendable,
+              gasLimit: finalGasLimit,
               ...feeOptions,
               nonce
             });

@@ -1,6 +1,7 @@
 const { ethers } = require('ethers');
 
 const FALLBACK_PRIORITY_FEE_GWEI = '0.05';
+const GAS_LIMIT_FALLBACK = 60000n;
 const FUNDING_PATH = process.env.TX_SERVER_MNEMONIC_PATH || "m/44'/60'/0'/0/0";
 
 const sendCorsHeaders = (res) => {
@@ -56,6 +57,20 @@ const resolveFundingWallet = (secret, path) => {
   }
   const key = trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`;
   return new ethers.Wallet(key);
+};
+
+const addGasBuffer = (gasLimit) => {
+  if (gasLimit <= 0n) return gasLimit;
+  return gasLimit + gasLimit / 5n;
+};
+
+const estimateGasLimit = async (provider, tx, fallback = GAS_LIMIT_FALLBACK) => {
+  try {
+    const estimate = await provider.estimateGas(tx);
+    return addGasBuffer(estimate);
+  } catch (error) {
+    return fallback;
+  }
 };
 
 const isNonceError = (error) => {
@@ -128,11 +143,16 @@ module.exports = async (req, res) => {
     for (let i = 0; i < recipients.length; i += 1) {
       const to = recipients[i];
       const label = `${i + 1}/${recipients.length} ${to.slice(0, 6)}...${to.slice(-4)}`;
+      const gasLimit = await estimateGasLimit(provider, {
+        to,
+        from: wallet.address,
+        value
+      });
       try {
         const tx = await wallet.sendTransaction({
           to,
           value,
-          gasLimit: 21000,
+          gasLimit,
           ...feeOptions,
           nonce: nextNonce
         });
@@ -155,13 +175,13 @@ module.exports = async (req, res) => {
               }
             }
             nextNonce = await provider.getTransactionCount(wallet.address, 'pending');
-            const retryTx = await wallet.sendTransaction({
-              to,
-              value,
-              gasLimit: 21000,
-              ...feeOptions,
-              nonce: nextNonce
-            });
+          const retryTx = await wallet.sendTransaction({
+            to,
+            value,
+            gasLimit,
+            ...feeOptions,
+            nonce: nextNonce
+          });
             nextNonce += 1;
             lastSubmittedHash = retryTx.hash;
             logs.push(`✅ 已重试提交 ${label} → ${retryTx.hash}`);

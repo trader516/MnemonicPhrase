@@ -33,6 +33,7 @@ loadEnvFile(path.resolve(process.cwd(), '.env.server'));
 const PORT = Number(process.env.TX_SERVER_PORT || 8788);
 const FUNDING_PATH = process.env.TX_SERVER_MNEMONIC_PATH || "m/44'/60'/0'/0/0";
 const FALLBACK_PRIORITY_FEE_GWEI = '0.05';
+const GAS_LIMIT_FALLBACK = 60000n;
 
 const parseJsonBody = (req) =>
   new Promise((resolve, reject) => {
@@ -97,6 +98,20 @@ const isInFlightLimitError = (error) => {
   return /in-flight transaction limit/i.test(message);
 };
 
+const addGasBuffer = (gasLimit) => {
+  if (gasLimit <= 0n) return gasLimit;
+  return gasLimit + gasLimit / 5n;
+};
+
+const estimateGasLimit = async (provider, tx, fallback = GAS_LIMIT_FALLBACK) => {
+  try {
+    const estimate = await provider.estimateGas(tx);
+    return addGasBuffer(estimate);
+  } catch (error) {
+    return fallback;
+  }
+};
+
 const handleSendBatch = async (payload) => {
   const recipients = Array.isArray(payload.recipients) ? payload.recipients : [];
   const amountEth = payload.amountEth;
@@ -130,11 +145,16 @@ const handleSendBatch = async (payload) => {
   for (let i = 0; i < recipients.length; i += 1) {
     const to = recipients[i];
     const label = `${i + 1}/${recipients.length} ${to.slice(0, 6)}...${to.slice(-4)}`;
+    const gasLimit = await estimateGasLimit(provider, {
+      to,
+      from: wallet.address,
+      value
+    });
     try {
       const tx = await wallet.sendTransaction({
         to,
         value,
-        gasLimit: 21000,
+        gasLimit,
         ...feeOptions,
         nonce: nextNonce
       });
@@ -157,13 +177,13 @@ const handleSendBatch = async (payload) => {
             }
           }
           nextNonce = await provider.getTransactionCount(wallet.address, 'pending');
-          const retryTx = await wallet.sendTransaction({
-            to,
-            value,
-            gasLimit: 21000,
-            ...feeOptions,
-            nonce: nextNonce
-          });
+        const retryTx = await wallet.sendTransaction({
+          to,
+          value,
+          gasLimit,
+          ...feeOptions,
+          nonce: nextNonce
+        });
           nextNonce += 1;
           lastSubmittedHash = retryTx.hash;
           logs.push(`✅ 已重试提交 ${label} → ${retryTx.hash}`);
@@ -207,7 +227,6 @@ const handleReclaimBatch = async (payload) => {
 
   const provider = getProvider(rpcUrl);
   const feeOptions = await getFeeOptions(provider);
-  const gasCost = feeOptions.maxFeePerGas * 21000n;
   const reserveWei = ethers.parseEther(reserveEth);
   const logs = [];
 
@@ -227,6 +246,12 @@ const handleReclaimBatch = async (payload) => {
       const wallet = new ethers.Wallet(key).connect(provider);
       const nonce = await provider.getTransactionCount(wallet.address, 'pending');
       const balance = await provider.getBalance(wallet.address);
+      const estimatedGasLimit = await estimateGasLimit(provider, {
+        to: reclaimAddress,
+        from: wallet.address,
+        value: 1n
+      });
+      const gasCost = estimatedGasLimit * feeOptions.maxFeePerGas;
       const sendable = balance - reserveWei - gasCost;
 
       if (sendable <= 0n) {
@@ -234,10 +259,27 @@ const handleReclaimBatch = async (payload) => {
         continue;
       }
 
+      const finalGasLimit = await estimateGasLimit(
+        provider,
+        {
+          to: reclaimAddress,
+          from: wallet.address,
+          value: sendable
+        },
+        estimatedGasLimit
+      );
+      const finalGasCost = finalGasLimit * feeOptions.maxFeePerGas;
+      const finalSendable = balance - reserveWei - finalGasCost;
+
+      if (finalSendable <= 0n) {
+        logs.push(`⚠️ 余额不足，跳过 ${label}`);
+        continue;
+      }
+
       const tx = await wallet.sendTransaction({
         to: reclaimAddress,
-        value: sendable,
-        gasLimit: 21000,
+        value: finalSendable,
+        gasLimit: finalGasLimit,
         ...feeOptions,
         nonce
       });

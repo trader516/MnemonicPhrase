@@ -1,6 +1,7 @@
 const { ethers } = require('ethers');
 
 const FALLBACK_PRIORITY_FEE_GWEI = '0.05';
+const GAS_LIMIT_FALLBACK = 60000n;
 
 const sendCorsHeaders = (res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -42,6 +43,20 @@ const getFeeOptions = async (provider) => {
     maxFeePerGas: feeData.maxFeePerGas || feeData.gasPrice || fallbackPriority,
     maxPriorityFeePerGas: feeData.maxPriorityFeePerGas || fallbackPriority
   };
+};
+
+const addGasBuffer = (gasLimit) => {
+  if (gasLimit <= 0n) return gasLimit;
+  return gasLimit + gasLimit / 5n;
+};
+
+const estimateGasLimit = async (provider, tx, fallback = GAS_LIMIT_FALLBACK) => {
+  try {
+    const estimate = await provider.estimateGas(tx);
+    return addGasBuffer(estimate);
+  } catch (error) {
+    return fallback;
+  }
 };
 
 const isNonceError = (error) => {
@@ -100,7 +115,6 @@ module.exports = async (req, res) => {
 
     const provider = getProvider(rpcUrl);
     const feeOptions = await getFeeOptions(provider);
-    const gasCost = feeOptions.maxFeePerGas * 21000n;
     const reserveWei = ethers.parseEther(reserveEth);
     const logs = [];
 
@@ -120,6 +134,12 @@ module.exports = async (req, res) => {
         const wallet = new ethers.Wallet(key).connect(provider);
         let nonce = await provider.getTransactionCount(wallet.address, 'pending');
         const balance = await provider.getBalance(wallet.address);
+        const estimatedGasLimit = await estimateGasLimit(provider, {
+          to: reclaimAddress,
+          from: wallet.address,
+          value: 1n
+        });
+        const gasCost = estimatedGasLimit * feeOptions.maxFeePerGas;
         const sendable = balance - reserveWei - gasCost;
 
         if (sendable <= 0n) {
@@ -127,11 +147,28 @@ module.exports = async (req, res) => {
           continue;
         }
 
+        const finalGasLimit = await estimateGasLimit(
+          provider,
+          {
+            to: reclaimAddress,
+            from: wallet.address,
+            value: sendable
+          },
+          estimatedGasLimit
+        );
+        const finalGasCost = finalGasLimit * feeOptions.maxFeePerGas;
+        const finalSendable = balance - reserveWei - finalGasCost;
+
+        if (finalSendable <= 0n) {
+          logs.push(`⚠️ 余额不足，跳过 ${label}`);
+          continue;
+        }
+
         try {
           const tx = await wallet.sendTransaction({
             to: reclaimAddress,
-            value: sendable,
-            gasLimit: 21000,
+            value: finalSendable,
+            gasLimit: finalGasLimit,
             ...feeOptions,
             nonce
           });
@@ -149,8 +186,8 @@ module.exports = async (req, res) => {
             nonce = await provider.getTransactionCount(wallet.address, 'pending');
             const retryTx = await wallet.sendTransaction({
               to: reclaimAddress,
-              value: sendable,
-              gasLimit: 21000,
+              value: finalSendable,
+              gasLimit: finalGasLimit,
               ...feeOptions,
               nonce
             });
