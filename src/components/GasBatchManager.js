@@ -38,6 +38,17 @@ import {
 
 const FALLBACK_PRIORITY_FEE_GWEI = '0.05';
 const GAS_LIMIT_FALLBACK = 60000n;
+const TOKEN_GAS_FALLBACK = 100000n;
+const DEFAULT_USDC_ADDRESS =
+  process.env.REACT_APP_BASE_USDC_ADDRESS ||
+  '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+
+const ERC20_ABI = [
+  'function balanceOf(address owner) view returns (uint256)',
+  'function transfer(address to, uint256 amount) returns (bool)',
+  'function decimals() view returns (uint8)',
+  'function symbol() view returns (string)'
+];
 
 const normalizeHeader = (value) => {
   if (!value) return '';
@@ -202,6 +213,15 @@ const estimateGasLimit = async (provider, tx, fallback = GAS_LIMIT_FALLBACK) => 
   }
 };
 
+const estimateTokenTransferGas = async (contract, to, amount, fallback = TOKEN_GAS_FALLBACK) => {
+  try {
+    const estimate = await contract.estimateGas.transfer(to, amount);
+    return addGasBuffer(estimate);
+  } catch (error) {
+    return fallback;
+  }
+};
+
 const GasBatchManager = () => {
   const networks = useMemo(
     () => getSupportedNetworks().filter((network) => network.name.includes('Base')),
@@ -262,6 +282,14 @@ const GasBatchManager = () => {
   const [reclaiming, setReclaiming] = useState(false);
   const [reclaimLogs, setReclaimLogs] = useState([]);
   const [reclaimWaitConfirm, setReclaimWaitConfirm] = useState(false);
+
+  const [collectTokenAddress, setCollectTokenAddress] = useState(DEFAULT_USDC_ADDRESS);
+  const [collectAddress, setCollectAddress] = useState('');
+  const [collectReserve, setCollectReserve] = useState('0');
+  const [collectDelayMs, setCollectDelayMs] = useState(400);
+  const [collecting, setCollecting] = useState(false);
+  const [collectLogs, setCollectLogs] = useState([]);
+  const [collectWaitConfirm, setCollectWaitConfirm] = useState(false);
 
   const effectiveRpcUrl = useProxy ? proxyUrl : rpcUrl;
 
@@ -713,6 +741,123 @@ const GasBatchManager = () => {
     }
   };
 
+  const handleBatchCollectUsdc = async () => {
+    if (collecting) return;
+    if (useBackendSender) {
+      setCollectLogs((prev) => [
+        ...prev,
+        '❌ USDC 归集暂不支持后端模式，请关闭“使用后端发送交易”'
+      ]);
+      return;
+    }
+    if (!isValidEthereumAddress(collectAddress)) {
+      setCollectLogs((prev) => [...prev, '❌ 请输入有效的归集地址']);
+      return;
+    }
+    if (!isValidEthereumAddress(collectTokenAddress)) {
+      setCollectLogs((prev) => [...prev, '❌ 请输入有效的 USDC 合约地址']);
+      return;
+    }
+    if (!rpcUrl.trim()) {
+      setCollectLogs((prev) => [...prev, '❌ 请输入 RPC 地址']);
+      return;
+    }
+    if (selectedAccounts.length === 0) {
+      setCollectLogs((prev) => [...prev, '❌ 请至少选择一个归集账号']);
+      return;
+    }
+
+    setCollecting(true);
+    setCollectLogs([]);
+
+    try {
+      const provider = getProvider();
+      const readContract = new ethers.Contract(collectTokenAddress, ERC20_ABI, provider);
+      let decimals = 6;
+      let symbol = 'USDC';
+
+      try {
+        const decimalsValue = await readContract.decimals();
+        const parsed = Number(decimalsValue);
+        if (!Number.isNaN(parsed)) {
+          decimals = parsed;
+        }
+      } catch (error) {
+        // Keep default decimals.
+      }
+
+      try {
+        const symbolValue = await readContract.symbol();
+        if (symbolValue) {
+          symbol = symbolValue;
+        }
+      } catch (error) {
+        // Keep default symbol.
+      }
+
+      let reserveAmount = 0n;
+      try {
+        reserveAmount = ethers.parseUnits(collectReserve || '0', decimals);
+      } catch (error) {
+        throw new Error('预留数量无效');
+      }
+
+      const feeOptions = await getFeeOptions(provider);
+      const lowerCollectAddress = collectAddress.toLowerCase();
+
+      for (let i = 0; i < selectedAccounts.length; i += 1) {
+        const account = selectedAccounts[i];
+        const label = `${i + 1}/${selectedAccounts.length} ${formatAddress(account.address, 6, 4)}`;
+
+        if (!account.address || !isValidEthereumAddress(account.address)) {
+          setCollectLogs((prev) => [...prev, `⚠️ 地址无效，跳过 ${label}`]);
+          continue;
+        }
+        if (!account.privateKey) {
+          setCollectLogs((prev) => [...prev, `⚠️ 无私钥，跳过 ${label}`]);
+          continue;
+        }
+        if (account.address.toLowerCase() === lowerCollectAddress) {
+          setCollectLogs((prev) => [...prev, `⚠️ 地址与归集地址相同，跳过 ${label}`]);
+          continue;
+        }
+
+        try {
+          const wallet = new ethers.Wallet(account.privateKey).connect(provider);
+          const contract = readContract.connect(wallet);
+          const balance = await contract.balanceOf(wallet.address);
+          const sendable = balance - reserveAmount;
+
+          if (sendable <= 0n) {
+            setCollectLogs((prev) => [...prev, `⚠️ ${symbol} 余额不足，跳过 ${label}`]);
+            continue;
+          }
+
+          const gasLimit = await estimateTokenTransferGas(contract, collectAddress, sendable);
+          const tx = await contract.transfer(collectAddress, sendable, {
+            gasLimit,
+            ...feeOptions
+          });
+          setCollectLogs((prev) => [...prev, `✅ 已提交 ${label} → ${tx.hash}`]);
+          if (collectWaitConfirm) {
+            await tx.wait(1);
+            setCollectLogs((prev) => [...prev, `✅ 已确认 ${label}`]);
+          }
+        } catch (error) {
+          setCollectLogs((prev) => [...prev, `❌ 归集失败 ${label}: ${error.message}`]);
+        }
+
+        if (i < selectedAccounts.length - 1) {
+          await delay(collectDelayMs);
+        }
+      }
+    } catch (error) {
+      setCollectLogs((prev) => [...prev, `❌ 归集流程失败: ${describeRpcError(error)}`]);
+    } finally {
+      setCollecting(false);
+    }
+  };
+
   return (
     <Paper elevation={2} sx={{ p: 3 }}>
       <Typography variant="h5" gutterBottom>
@@ -1056,6 +1201,68 @@ const GasBatchManager = () => {
         {reclaimLogs.length > 0 && (
           <Box sx={{ mt: 2 }}>
             {reclaimLogs.map((log, index) => (
+              <Typography key={`${log}-${index}`} variant="body2">
+                {log}
+              </Typography>
+            ))}
+          </Box>
+        )}
+      </Box>
+
+      <Box sx={{ mb: 2 }}>
+        <Typography variant="subtitle1" gutterBottom>
+          5.1 批量归集 USDC
+        </Typography>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 2, mb: 2 }}>
+          <TextField
+            label="归集地址"
+            value={collectAddress}
+            onChange={(event) => setCollectAddress(event.target.value)}
+            helperText="USDC 将归集到此地址"
+          />
+          <TextField
+            label="USDC 合约地址"
+            value={collectTokenAddress}
+            onChange={(event) => setCollectTokenAddress(event.target.value)}
+            helperText="默认 Base USDC"
+          />
+          <TextField
+            label="预留数量 (USDC)"
+            value={collectReserve}
+            onChange={(event) => setCollectReserve(event.target.value)}
+          />
+          <TextField
+            label="归集间隔 (ms)"
+            value={collectDelayMs}
+            onChange={(event) => setCollectDelayMs(Number(event.target.value) || 0)}
+          />
+        </Box>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={collectWaitConfirm}
+              onChange={(event) => setCollectWaitConfirm(event.target.checked)}
+            />
+          }
+          label="等待确认"
+        />
+        {useBackendSender && (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            USDC 归集仅支持前端 RPC / 代理模式，请关闭“使用后端发送交易”。
+          </Alert>
+        )}
+        <Box sx={{ mt: 1 }}>
+          <Button
+            variant="contained"
+            onClick={handleBatchCollectUsdc}
+            disabled={collecting || useBackendSender}
+          >
+            {collecting ? '归集中...' : '开始批量归集'}
+          </Button>
+        </Box>
+        {collectLogs.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            {collectLogs.map((log, index) => (
               <Typography key={`${log}-${index}`} variant="body2">
                 {log}
               </Typography>

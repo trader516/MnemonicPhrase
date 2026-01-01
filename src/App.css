@@ -6,6 +6,7 @@
 /* 选项卡样式 */
 .tab-container {
   display: flex;
+  flex-wrap: wrap;
   border-bottom: 1px solid #e0e0e0;
   margin-bottom: 20px;
 }
@@ -264,4 +265,3 @@
   opacity: 1;
   visibility: visible;
 }
-

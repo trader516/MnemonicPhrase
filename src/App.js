@@ -6,6 +6,7 @@ import EncryptionPanel from './components/EncryptionPanel';
 import BatchProcessor from './components/BatchProcessor';
 import AddressValidator from './components/AddressValidator';
 import GasBatchManager from './components/GasBatchManager';
+import BalanceBatchQuery from './components/BalanceBatchQuery';
 import './App.css';
 
 const theme = createTheme({
@@ -141,6 +142,12 @@ function App() {
               >
                 ⛽ Gas 批量
               </button>
+              <button
+                className={`tab-button ${currentTab === 6 ? 'active' : ''}`}
+                onClick={() => setCurrentTab(6)}
+              >
+                💰 批量查询
+              </button>
             </div>
           </Box>
 
@@ -181,6 +188,10 @@ function App() {
 
           {currentTab === 5 && (
             <GasBatchManager />
+          )}
+
+          {currentTab === 6 && (
+            <BalanceBatchQuery />
           )}
         </Paper>
 
