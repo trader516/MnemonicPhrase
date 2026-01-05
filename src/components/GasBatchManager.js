@@ -276,6 +276,13 @@ const GasBatchManager = () => {
   const [sendLogs, setSendLogs] = useState([]);
   const [waitConfirm, setWaitConfirm] = useState(false);
 
+  const [sendTokenAddress, setSendTokenAddress] = useState(DEFAULT_USDC_ADDRESS);
+  const [sendTokenAmount, setSendTokenAmount] = useState('1');
+  const [sendTokenDelayMs, setSendTokenDelayMs] = useState(400);
+  const [sendingToken, setSendingToken] = useState(false);
+  const [sendTokenLogs, setSendTokenLogs] = useState([]);
+  const [sendTokenWaitConfirm, setSendTokenWaitConfirm] = useState(false);
+
   const [reclaimAddress, setReclaimAddress] = useState('');
   const [reclaimReserve, setReclaimReserve] = useState('0.0000001');
   const [reclaimDelayMs, setReclaimDelayMs] = useState(400);
@@ -622,6 +629,174 @@ const GasBatchManager = () => {
       setSendLogs((prev) => [...prev, `❌ 发送流程失败: ${describeRpcError(error)}`]);
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleBatchSendUsdc = async () => {
+    if (sendingToken) return;
+    if (useBackendSender) {
+      setSendTokenLogs((prev) => [
+        ...prev,
+        '❌ USDC 发送暂不支持后端模式，请关闭“使用后端发送交易”'
+      ]);
+      return;
+    }
+    if (!fundingSecret.trim()) {
+      setSendTokenLogs((prev) => [...prev, '❌ 请输入资金账户私钥或助记词']);
+      return;
+    }
+    if (!rpcUrl.trim()) {
+      setSendTokenLogs((prev) => [...prev, '❌ 请输入 RPC 地址']);
+      return;
+    }
+    if (!isValidEthereumAddress(sendTokenAddress)) {
+      setSendTokenLogs((prev) => [...prev, '❌ 请输入有效的 USDC 合约地址']);
+      return;
+    }
+
+    const recipients = [
+      ...selectedAccounts.map((item) => item.address).filter(isValidEthereumAddress),
+      ...validManualRecipients
+    ];
+    if (recipients.length === 0) {
+      setSendTokenLogs((prev) => [...prev, '❌ 请至少选择一个收款地址']);
+      return;
+    }
+
+    setSendingToken(true);
+    setSendTokenLogs([]);
+
+    try {
+      const provider = getProvider();
+      const wallet = resolveFundingWallet().connect(provider);
+      const contract = new ethers.Contract(sendTokenAddress, ERC20_ABI, wallet);
+
+      let decimals = 6;
+      let symbol = 'USDC';
+      try {
+        const decimalsValue = await contract.decimals();
+        const parsed = Number(decimalsValue);
+        if (!Number.isNaN(parsed)) {
+          decimals = parsed;
+        }
+      } catch (error) {
+        // Keep default decimals.
+      }
+      try {
+        const symbolValue = await contract.symbol();
+        if (symbolValue) {
+          symbol = symbolValue;
+        }
+      } catch (error) {
+        // Keep default symbol.
+      }
+
+      let amount;
+      try {
+        amount = ethers.parseUnits(sendTokenAmount, decimals);
+      } catch (error) {
+        throw new Error('发送数量无效');
+      }
+      if (amount <= 0n) {
+        throw new Error('发送数量必须大于 0');
+      }
+
+      const feeOptions = await getFeeOptions(provider);
+      let nextNonce = await provider.getTransactionCount(wallet.address, 'pending');
+      let lastSubmittedHash = null;
+
+      for (let i = 0; i < recipients.length; i += 1) {
+        const to = recipients[i];
+        const label = `${i + 1}/${recipients.length} ${formatAddress(to, 6, 4)}`;
+        const gasLimit = await estimateTokenTransferGas(contract, to, amount);
+
+        try {
+          const tx = await contract.transfer(to, amount, {
+            gasLimit,
+            ...feeOptions,
+            nonce: nextNonce
+          });
+          nextNonce += 1;
+          lastSubmittedHash = tx.hash;
+          setSendTokenLogs((prev) => [
+            ...prev,
+            `✅ 已提交 ${label} ${symbol} → ${tx.hash}`
+          ]);
+          if (sendTokenWaitConfirm) {
+            await tx.wait(1);
+            setSendTokenLogs((prev) => [...prev, `✅ 已确认 ${label}`]);
+          }
+        } catch (error) {
+          if (isNonceError(error)) {
+            try {
+              nextNonce = await provider.getTransactionCount(wallet.address, 'pending');
+              const retryTx = await contract.transfer(to, amount, {
+                gasLimit,
+                ...feeOptions,
+                nonce: nextNonce
+              });
+              nextNonce += 1;
+              lastSubmittedHash = retryTx.hash;
+              setSendTokenLogs((prev) => [
+                ...prev,
+                `✅ 已重试提交 ${label} ${symbol} → ${retryTx.hash}`
+              ]);
+              if (sendTokenWaitConfirm) {
+                await retryTx.wait(1);
+                setSendTokenLogs((prev) => [...prev, `✅ 已确认 ${label}`]);
+              }
+            } catch (retryError) {
+              setSendTokenLogs((prev) => [
+                ...prev,
+                `❌ 发送失败 ${label}: ${retryError.message}`
+              ]);
+            }
+          } else if (isInFlightLimitError(error)) {
+            try {
+              setSendTokenLogs((prev) => [
+                ...prev,
+                `⏳ 节点限制未确认交易数量，等待确认后重试 ${label}`
+              ]);
+              if (lastSubmittedHash) {
+                await provider.waitForTransaction(lastSubmittedHash, 1);
+              } else {
+                await delay(Math.max(sendTokenDelayMs, 2000));
+              }
+              nextNonce = await provider.getTransactionCount(wallet.address, 'pending');
+              const retryTx = await contract.transfer(to, amount, {
+                gasLimit,
+                ...feeOptions,
+                nonce: nextNonce
+              });
+              nextNonce += 1;
+              lastSubmittedHash = retryTx.hash;
+              setSendTokenLogs((prev) => [
+                ...prev,
+                `✅ 已重试提交 ${label} ${symbol} → ${retryTx.hash}`
+              ]);
+              if (sendTokenWaitConfirm) {
+                await retryTx.wait(1);
+                setSendTokenLogs((prev) => [...prev, `✅ 已确认 ${label}`]);
+              }
+            } catch (retryError) {
+              setSendTokenLogs((prev) => [
+                ...prev,
+                `❌ 发送失败 ${label}: ${retryError.message}`
+              ]);
+            }
+          } else {
+            setSendTokenLogs((prev) => [...prev, `❌ 发送失败 ${label}: ${error.message}`]);
+          }
+        }
+
+        if (i < recipients.length - 1) {
+          await delay(sendTokenDelayMs);
+        }
+      }
+    } catch (error) {
+      setSendTokenLogs((prev) => [...prev, `❌ 发送流程失败: ${describeRpcError(error)}`]);
+    } finally {
+      setSendingToken(false);
     }
   };
 
@@ -1154,6 +1329,64 @@ const GasBatchManager = () => {
         {sendLogs.length > 0 && (
           <Box sx={{ mt: 2 }}>
             {sendLogs.map((log, index) => (
+              <Typography key={`${log}-${index}`} variant="body2">
+                {log}
+              </Typography>
+            ))}
+          </Box>
+        )}
+      </Box>
+
+      <Box sx={{ mb: 4 }}>
+        <Typography variant="subtitle1" gutterBottom>
+          4.1 批量发送 USDC
+        </Typography>
+        <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+          使用上方资金账户批量发送 USDC（或其他 ERC20 合约）。
+        </Typography>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 2, mb: 2 }}>
+          <TextField
+            label="USDC 合约地址"
+            value={sendTokenAddress}
+            onChange={(event) => setSendTokenAddress(event.target.value)}
+          />
+          <TextField
+            label="每个地址发送数量 (USDC)"
+            value={sendTokenAmount}
+            onChange={(event) => setSendTokenAmount(event.target.value)}
+          />
+          <TextField
+            label="发送间隔 (ms)"
+            value={sendTokenDelayMs}
+            onChange={(event) => setSendTokenDelayMs(Number(event.target.value) || 0)}
+          />
+        </Box>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={sendTokenWaitConfirm}
+              onChange={(event) => setSendTokenWaitConfirm(event.target.checked)}
+            />
+          }
+          label="等待确认"
+        />
+        {useBackendSender && (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            USDC 发送仅支持前端 RPC / 代理模式，请关闭“使用后端发送交易”。
+          </Alert>
+        )}
+        <Box sx={{ mt: 1 }}>
+          <Button
+            variant="contained"
+            onClick={handleBatchSendUsdc}
+            disabled={sendingToken || useBackendSender}
+          >
+            {sendingToken ? '发送中...' : '开始批量发送 USDC'}
+          </Button>
+        </Box>
+        {sendTokenLogs.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            {sendTokenLogs.map((log, index) => (
               <Typography key={`${log}-${index}`} variant="body2">
                 {log}
               </Typography>
